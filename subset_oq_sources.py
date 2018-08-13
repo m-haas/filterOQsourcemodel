@@ -7,11 +7,17 @@ import re
 
 ###Config###
 output='reduced_source.xml'
-#buf buffer in km
-d=200
-#site
-xt=-71.5730623712764
-yt=-33.1299174879672
+
+#two options either distance or region
+ftype = 'region'
+xr = [-75,-68]
+yr = [-36,-30]
+##buf buffer in km
+#ftype = 'distance'
+#d=200
+##site
+#xt=-71.5730623712764
+#yt=-33.1299174879672
 #x = 32
 #y = 32
 #source model
@@ -57,33 +63,96 @@ def closeby(x1,y1,x2,y2,d):
             except:
                 raise Exception('No distance calculation possible:',x1,y1,x2,y2)
 
+def within(x,y,xmin,xmax,ymin,ymax):
+    '''
+    Checks if a point is within a rectangular region
+    '''
+    return (x<=xmax) & (x>=xmin) & (y<=ymax) & (y>=ymin)
+
+def intersects_poly(x,y,x2,y2):
+    '''
+    Checks if geometry intersects with a polygon region
+    '''
+    #x,y are lists xmin,xmax,ymin,ymax
+    #x2,y2 are lists (source coordinates)
+    try:
+        x2[0]
+        return any([within(float(xs),float(ys),x[0],x[1],y[0],y[1]) for xs,ys in zip(x2,y2)])
+    except:
+        #No list only point
+        try:
+            return within(float(x2),float(y2),x[0],x[1],y[0],y[1])
+        except:
+            raise Exception('No within calculation possible:',x,y,x2,y2)
 
 ###Read Source Model###
 with open(sm) as f:
     doc = f.read()
 soup = BeautifulSoup(doc, 'xml')
 
-#POINT SOURCES
+##POINT SOURCES
 print('###\nProcessing {}\n###\n'.format(sm))
 #find all position informations
 print('---\nPoint sources\n---\n'.format(sm))
-positions = soup.find_all('gml:pos')
-print('Found {} point sources'.format(len(positions)))
-#get coordinates
-coords = [p.contents[0].strip().split(' ') for p in positions]
-#check if these are not close enough to site
-far = [not(closeby(xt,yt,xs,ys,d)) for xs,ys in coords]
-#go through positions
-count=0
-for p,f in zip(positions,far):
-    #if far:
-    if f:
-        #find parent
-        p.findAllPrevious(name='pointSource')[0].decompose()
-    else:
-        count+=1
+#positions = soup.find_all('gml:pos')
+#print('Found {} point sources'.format(len(positions)))
+point_sources = soup.find_all('pointSource')
+print('Found {} point sources'.format(len(point_sources)))
 
-print('Reduced point sources to {} within {} km around ({},{})'.format(count,d,xt,yt))
+count = 0
+for ps in point_sources:
+    positions=ps.find_all('gml:pos')
+    #get coordinates
+    coords = [p.contents[0].strip().split(' ') for p in positions]
+    if ftype=='distance':
+        #check if at least one is close enough to site
+        close = [closeby(xt,yt,cp[0:][::2],cp[1:][::2],d) for cp in coords]
+        if any(close):
+            count=+1
+        else:
+            #find parent and delete
+            ps.decompose()
+    elif ftype=='region':
+        #check if at least one is within the region
+        in_r = [intersects_poly(xr,yr,cp[0:][::2],cp[1:][::2]) for cp in coords]
+        if any(in_r):
+            count=+1
+        else:
+            #find parent and delete
+            ps.decompose()
+    else:
+        print("ftype has to be region or distance")
+
+print('Reduced point sources to {}'.format(count))
+
+##get coordinates
+#coords = [p.contents[0].strip().split(' ') for p in positions]
+#if ftype=='distance':
+#    print('Using distance buffer of {} km around site {},{}'.format(d,xt,yt))
+#    #check if these are not close enough to site
+#    far = [not(closeby(xt,yt,xs,ys,d)) for xs,ys in coords]
+#    #go through positions
+#    count=0
+#    for p,f in zip(positions,far):
+#        #if far:
+#        if f:
+#            #find parent
+#            p.findAllPrevious(name='pointSource')[0].decompose()
+#        else:
+#            count+=1
+#
+#elif ftype=='region':
+#    print('Using region between {},{} degrees lon and {},{} degrees lat'.format(xr[0],xr[1],yr[0],yr[1]))
+#    far = [not(closeby(xt,yt,xs,ys,d)) for xs,ys in coords]
+#    #go through positions
+#    count=0
+#    for p,f in zip(positions,far):
+#        #if far:
+#        if f:
+#            #find parent
+#            p.findAllPrevious(name='pointSource')[0].decompose()
+#
+#print('Reduced point sources to {}'.format(count))
 
 #COMPLEX FAULTS
 complex_sources = soup.find_all('complexFaultSource')
@@ -95,15 +164,26 @@ for cs in complex_sources:
     positions=cs.find_all('gml:posList')
     #get coordinates
     coords = [p.contents[0].strip().split(' ') for p in positions]
-    #check if at least one is close enough to site
-    close = [closeby(xt,yt,cp[0:][::2],cp[1:][::2],d) for cp in coords]
-    if any(close):
-        count=+1
+    if ftype=='distance':
+        #check if at least one is close enough to site
+        close = [closeby(xt,yt,cp[0:][::2],cp[1:][::2],d) for cp in coords]
+        if any(close):
+            count=+1
+        else:
+            #find parent and delete
+            cs.decompose()
+    elif ftype=='region':
+        #check if at least one is within the region
+        in_r = [intersects_poly(xr,yr,cp[0:][::2],cp[1:][::2]) for cp in coords]
+        if any(in_r):
+            count=+1
+        else:
+            #find parent and delete
+            cs.decompose()
     else:
-        #find parent and delete
-        cs.decompose()
+        print("ftype has to be region or distance")
 
-print('Reduced complex sources to {} within {} km around ({},{})'.format(count,d,xt,yt))
+print('Reduced complex sources to {}'.format(count))
 
 #FAULT SOURCES
 #find all position informations
@@ -116,12 +196,23 @@ for fs in fault_sources:
     positions=fs.find_all('gml:posList')
     #get coordinates
     coords = [p.contents[0].strip().split(' ') for p in positions]
-    #check if these are not close enough to site
-    far = [not(closeby(xt,yt,cp[0:][::2],cp[1:][::2],d)) for cp in coords]
-    if any(far):
-        fs.decompose()
+    if ftype=='distance':
+        #check if these are not close enough to site
+        far = [not(closeby(xt,yt,cp[0:][::2],cp[1:][::2],d)) for cp in coords]
+        if any(far):
+            fs.decompose()
+        else:
+            count+=1
+    elif ftype=='region':
+        #check if at least one is within the region
+        in_r = [intersects_poly(xr,yr,cp[0:][::2],cp[1:][::2]) for cp in coords]
+        if any(in_r):
+            count+=1
+        else:
+            #find parent and delete
+            fs.decompose()
     else:
-        count+=1
+        print("ftype has to be region or distance")
     #go through positions
     #for p,f in zip(positions,far):
     #    #if far:
@@ -131,7 +222,7 @@ for fs in fault_sources:
     #    else:
     #        count+=1
 
-print('Reduced simple fault sources to {} within {} km around ({},{})'.format(count,d,xt,yt))
+print('Reduced simple fault sources to {}'.format(count))
 
 f = open(output, "w")
 f.write(soup.prettify())
